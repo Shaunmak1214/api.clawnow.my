@@ -1,0 +1,19 @@
+{
+  "name": "@clawnow/host-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build:bundle",
+    "build:bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=build/host-agent.mjs --tsconfig=tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@clawnow/core": "*",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.2"
+  }
+}

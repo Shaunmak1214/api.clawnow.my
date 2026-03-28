@@ -1,0 +1,319 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Provider {
+  DIGITALOCEAN
+  CONTABO
+  AWS
+}
+
+enum VmStatus {
+  PROVISIONING
+  ACTIVE
+  DRAINING
+  OFFLINE
+  DELETING
+  FAILED
+}
+
+enum InstanceState {
+  REQUESTED
+  PROVISIONING
+  RUNNING
+  PAUSED
+  FAILED
+  DELETING
+}
+
+enum SizeProfile {
+  SMALL
+  MEDIUM
+}
+
+enum VolumeStatus {
+  CREATING
+  ATTACHED
+  DETACHED
+  ERROR
+  DELETING
+}
+
+enum PlacementStatus {
+  ACTIVE
+  RELEASED
+  FAILED
+}
+
+enum OperationJobStatus {
+  PENDING
+  CLAIMED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum IntegrationType {
+  TELEGRAM
+  PAIRING
+}
+
+enum IntegrationStatus {
+  PENDING
+  ACTIVE
+  ERROR
+  DISABLED
+}
+
+enum BackupStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum MigrationStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model Account {
+  id               String             @id @default(cuid())
+  name             String
+  industry         String?
+  onboardingProfile Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  users            User[]
+  subscriptions    Subscription[]
+  instances        OpenClawInstance[]
+}
+
+model User {
+  id         String    @id @default(cuid())
+  accountId  String
+  email      String    @unique
+  name       String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  account    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  sshKeys    SshKey[]
+}
+
+model Plan {
+  id                String          @id @default(cuid())
+  key               String          @unique
+  name              String
+  monthlyPriceCents Int
+  instanceLimit     Int
+  messageLimit      Int
+  includedChannels  Int
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  subscriptions     Subscription[]
+}
+
+model Subscription {
+  id         String    @id @default(cuid())
+  accountId  String
+  planId     String
+  status     String
+  startedAt  DateTime  @default(now())
+  endsAt     DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  account    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  plan       Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+}
+
+model Vm {
+  id                    String              @id @default(cuid())
+  provider              Provider
+  providerVmId          String              @unique
+  bootstrapToken        String?             @unique
+  name                  String
+  hostname              String
+  publicIp              String?
+  region                String
+  sizeSlug              String
+  cpuTotalMillicores    Int
+  reservedCpuMillicores Int                 @default(0)
+  memoryTotalMb         Int
+  reservedMemoryMb      Int                 @default(0)
+  diskTotalGb           Int
+  containerCount        Int                 @default(0)
+  maxInstances          Int                 @default(2)
+  agentVersion          String?
+  cpuUsedPercent        Float               @default(0)
+  memoryUsedMb          Int                 @default(0)
+  diskUsedGb            Int                 @default(0)
+  lastHeartbeatAt       DateTime?
+  status                VmStatus            @default(PROVISIONING)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  placements            InstancePlacement[]
+  activeInstances       OpenClawInstance[]  @relation("CurrentInstanceVm")
+  attachedVolumes       Volume[]            @relation("AttachedVmVolumes")
+  jobs                  OperationJob[]
+}
+
+model Volume {
+  id               String             @id @default(cuid())
+  provider         Provider
+  providerVolumeId String             @unique
+  instanceId       String             @unique
+  attachedVmId     String?
+  region           String
+  sizeGb           Int
+  mountPath        String
+  status           VolumeStatus       @default(CREATING)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  instance         OpenClawInstance   @relation("InstanceVolume", fields: [instanceId], references: [id], onDelete: Cascade)
+  attachedVm       Vm?                @relation("AttachedVmVolumes", fields: [attachedVmId], references: [id], onDelete: SetNull)
+  placements       InstancePlacement[]
+}
+
+model OpenClawInstance {
+  id                     String              @id @default(cuid())
+  accountId              String
+  currentVmId            String?
+  name                   String
+  imageTag               String
+  sizeProfile            SizeProfile
+  reservedCpuMillicores  Int
+  reservedMemoryMb       Int
+  region                 String
+  state                  InstanceState       @default(REQUESTED)
+  adminUsername          String              @default("clawnow-admin")
+  sshPasswordCiphertext  String?
+  sshPasswordLastRotatedAt DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  account                Account             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  currentVm              Vm?                 @relation("CurrentInstanceVm", fields: [currentVmId], references: [id], onDelete: SetNull)
+  volume                 Volume?             @relation("InstanceVolume")
+  placements             InstancePlacement[]
+  integrations           Integration[]
+  jobs                   OperationJob[]
+  events                 InstanceEvent[]
+  backups                InstanceBackup[]
+  migrations             MigrationRun[]
+  sshKeys                SshKey[]
+}
+
+model InstancePlacement {
+  id         String           @id @default(cuid())
+  instanceId String
+  vmId       String
+  volumeId   String
+  status     PlacementStatus  @default(ACTIVE)
+  reason     String?
+  placedAt   DateTime         @default(now())
+  removedAt  DateTime?
+  instance   OpenClawInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  vm         Vm               @relation(fields: [vmId], references: [id], onDelete: Cascade)
+  volume     Volume           @relation(fields: [volumeId], references: [id], onDelete: Cascade)
+
+  @@index([instanceId, status])
+  @@index([vmId, status])
+}
+
+model SshKey {
+  id         String             @id @default(cuid())
+  userId     String
+  instanceId String
+  name       String
+  publicKey  String
+  fingerprint String
+  createdAt  DateTime           @default(now())
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instance   OpenClawInstance   @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Integration {
+  id               String             @id @default(cuid())
+  instanceId       String
+  type             IntegrationType
+  status           IntegrationStatus  @default(PENDING)
+  externalRef      String?
+  secretCiphertext String?
+  metadata         Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  instance         OpenClawInstance   @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@unique([instanceId, type])
+}
+
+model OperationJob {
+  id           String             @id @default(cuid())
+  instanceId   String?
+  vmId         String
+  type         String
+  status       OperationJobStatus @default(PENDING)
+  payload      Json
+  claimedAt    DateTime?
+  completedAt  DateTime?
+  attempts     Int                @default(0)
+  errorMessage String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  instance     OpenClawInstance?  @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+  vm           Vm                 @relation(fields: [vmId], references: [id], onDelete: Cascade)
+  logs         OperationLog[]
+
+  @@index([vmId, status, createdAt])
+}
+
+model OperationLog {
+  id        String       @id @default(cuid())
+  jobId      String
+  level      String
+  message    String
+  createdAt  DateTime    @default(now())
+  job        OperationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model InstanceEvent {
+  id         String             @id @default(cuid())
+  instanceId String
+  type       String
+  message    String
+  metadata   Json?
+  createdAt  DateTime           @default(now())
+  instance   OpenClawInstance   @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@index([instanceId, createdAt])
+}
+
+model InstanceBackup {
+  id          String             @id @default(cuid())
+  instanceId  String
+  storageKey  String?
+  checksum    String?
+  status      BackupStatus       @default(PENDING)
+  createdAt   DateTime           @default(now())
+  completedAt DateTime?
+  instance    OpenClawInstance   @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model MigrationRun {
+  id           String             @id @default(cuid())
+  instanceId   String
+  fromProvider Provider
+  toProvider   Provider
+  status       MigrationStatus    @default(PENDING)
+  notes        String?
+  createdAt    DateTime           @default(now())
+  completedAt  DateTime?
+  instance     OpenClawInstance   @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
