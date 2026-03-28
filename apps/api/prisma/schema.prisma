@@ -101,11 +101,24 @@ model User {
   id         String    @id @default(cuid())
   accountId  String
   email      String    @unique
+  passwordHash String   @default("")
   name       String?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   account    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  sessions   Session[]
   sshKeys    SshKey[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
 
 model Plan {

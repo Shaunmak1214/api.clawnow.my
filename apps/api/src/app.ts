@@ -1,8 +1,11 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import cookie from '@fastify/cookie'
 
 import { HttpError } from './lib/http-error.js'
+import { authRoutes } from './routes/auth.js'
 import { agentRoutes } from './routes/agent.js'
+import { env } from './config/env.js'
 import { healthRoutes } from './routes/health.js'
 import { instanceRoutes } from './routes/instances.js'
 import { meRoutes } from './routes/me.js'
@@ -15,10 +18,15 @@ export async function createApp() {
   })
 
   await app.register(cors, {
+    // Temporary seminar mode: reflect any incoming origin so the browser
+    // can send credentialed requests from whichever frontend host is live.
     origin: true,
+    credentials: true,
   })
+  await app.register(cookie)
 
   await app.register(healthRoutes)
+  await app.register(authRoutes)
   await app.register(meRoutes)
   await app.register(planRoutes)
   await app.register(onboardingRoutes)

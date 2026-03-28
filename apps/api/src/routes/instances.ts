@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 
+import { env } from '../config/env.js'
+import { HttpError } from '../lib/http-error.js'
 import { IdentityService } from '../services/identity-service.js'
 import { InstanceService } from '../services/instance-service.js'
 
@@ -29,14 +31,21 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
   const identityService = new IdentityService()
   const instanceService = new InstanceService()
 
-  app.get('/instances', async () => {
-    const { account } = await identityService.ensureDefaultIdentity()
+  function assertAutomaticProvisioningMode() {
+    if (env.INSTANCE_PROVISIONING_MODE === 'manual') {
+      throw new HttpError(403, 'Instance provisioning is disabled in manual mode')
+    }
+  }
+
+  app.get('/instances', async (request) => {
+    const { account } = await identityService.requireIdentity(request)
     return instanceService.listInstances(account.id)
   })
 
   app.post('/instances', async (request, reply) => {
+    assertAutomaticProvisioningMode()
     const input = createInstanceSchema.parse(request.body)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     const instance = await instanceService.createInstance({
       accountId: account.id,
       ...input,
@@ -47,19 +56,20 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/instances/:id', async (request) => {
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     return instanceService.getInstance(params.id, account.id)
   })
 
   app.get('/instances/:id/events', async (request) => {
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     return instanceService.listInstanceEvents(params.id, account.id)
   })
 
   app.post('/instances/:id/pause', async (request, reply) => {
+    assertAutomaticProvisioningMode()
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     await instanceService.updateInstanceState({
       accountId: account.id,
       instanceId: params.id,
@@ -70,8 +80,9 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.post('/instances/:id/resume', async (request, reply) => {
+    assertAutomaticProvisioningMode()
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     await instanceService.updateInstanceState({
       accountId: account.id,
       instanceId: params.id,
@@ -82,8 +93,9 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.delete('/instances/:id', async (request, reply) => {
+    assertAutomaticProvisioningMode()
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     await instanceService.updateInstanceState({
       accountId: account.id,
       instanceId: params.id,
@@ -96,7 +108,7 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
   app.post('/instances/:id/integrations/telegram', async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
     const input = telegramSchema.parse(request.body)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     await instanceService.connectTelegram({
       accountId: account.id,
       instanceId: params.id,
@@ -109,7 +121,7 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
   app.post('/instances/:id/pairing', async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
     const input = pairingSchema.parse(request.body)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     await instanceService.submitPairing({
       accountId: account.id,
       instanceId: params.id,
@@ -121,14 +133,14 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/instances/:id/ssh-keys', async (request) => {
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     return instanceService.listSshKeys(params.id, account.id)
   })
 
   app.post('/instances/:id/ssh-keys', async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).parse(request.params)
     const input = sshKeySchema.parse(request.body)
-    const { account, user } = await identityService.ensureDefaultIdentity()
+    const { account, user } = await identityService.requireIdentity(request)
     const key = await instanceService.addSshKey({
       accountId: account.id,
       userId: user.id,
@@ -141,7 +153,7 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete('/instances/:id/ssh-keys/:keyId', async (request, reply) => {
     const params = z.object({ id: z.string().min(1), keyId: z.string().min(1) }).parse(request.params)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
     await instanceService.deleteSshKey({
       accountId: account.id,
       instanceId: params.id,
@@ -151,8 +163,8 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
     return null
   })
 
-  app.get('/activity', async () => {
-    const { account } = await identityService.ensureDefaultIdentity()
+  app.get('/activity', async (request) => {
+    const { account } = await identityService.requireIdentity(request)
     return instanceService.listActivity(account.id)
   })
 }

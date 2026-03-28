@@ -21,7 +21,7 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/onboarding', async (request) => {
     const input = onboardingSchema.parse(request.body)
-    const { account } = await identityService.ensureDefaultIdentity()
+    const { account } = await identityService.requireIdentity(request)
 
     return prisma.account.update({
       where: { id: account.id },
