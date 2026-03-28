@@ -1,6 +1,5 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
-import cookie from '@fastify/cookie'
 
 import { HttpError } from './lib/http-error.js'
 import { authRoutes } from './routes/auth.js'
@@ -18,12 +17,9 @@ export async function createApp() {
   })
 
   await app.register(cors, {
-    // Temporary seminar mode: reflect any incoming origin so the browser
-    // can send credentialed requests from whichever frontend host is live.
     origin: true,
-    credentials: true,
+    credentials: false,
   })
-  await app.register(cookie)
 
   await app.register(healthRoutes)
   await app.register(authRoutes)

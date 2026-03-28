@@ -21,16 +21,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post('/auth/signup', async (request, reply) => {
     const input = signupSchema.parse(request.body)
     reply.code(201)
-    return identityService.signup(input, reply)
+    return identityService.signup(input)
   })
 
-  app.post('/auth/login', async (request, reply) => {
+  app.post('/auth/login', async (request) => {
     const input = loginSchema.parse(request.body)
-    return identityService.login(input, reply)
+    return identityService.login(input)
   })
 
   app.post('/auth/logout', async (request, reply) => {
-    await identityService.logout(request, reply)
+    await identityService.logout(request)
     reply.code(204)
     return null
   })
