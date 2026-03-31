@@ -15,6 +15,13 @@ type AccessTokenPayload = JwtPayload & {
   email: string
 }
 
+function railwayCreateAllowlistEmails() {
+  return env.CLAWNOW_RAILWAY_CREATE_ALLOWLIST_EMAILS
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+}
+
 function jwtSecret(): Secret {
   return env.JWT_SECRET ?? env.ENCRYPTION_KEY
 }
@@ -120,9 +127,21 @@ export class IdentityService {
       throw new HttpError(401, 'Authentication required')
     }
 
+    const sanitizedUser = this.sanitizeUser(user)
+
     return {
       account: user.account,
-      user: this.sanitizeUser(user),
+      user: sanitizedUser,
+      capabilities: this.capabilitiesForUser(sanitizedUser),
+    }
+  }
+
+  capabilitiesForUser(user: { email: string }) {
+    const normalizedEmail = user.email.trim().toLowerCase()
+    const allowlist = railwayCreateAllowlistEmails()
+
+    return {
+      canCreateRailwayService: allowlist.includes(normalizedEmail),
     }
   }
 

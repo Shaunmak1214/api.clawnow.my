@@ -23,14 +23,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const result = await identityService.signup(input)
     identityService.setAuthCookie(reply, result.accessToken)
     reply.code(201)
-    return result
+    return {
+      ...result,
+      capabilities: identityService.capabilitiesForUser(result.user),
+    }
   })
 
   app.post('/auth/login', async (request, reply) => {
     const input = loginSchema.parse(request.body)
     const result = await identityService.login(input)
     identityService.setAuthCookie(reply, result.accessToken)
-    return result
+    return {
+      ...result,
+      capabilities: identityService.capabilitiesForUser(result.user),
+    }
   })
 
   app.post('/auth/logout', async (request, reply) => {

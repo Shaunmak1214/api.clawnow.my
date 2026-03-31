@@ -6,7 +6,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
   const identityService = new IdentityService()
 
   app.get('/me', async (request) => {
-    const { account, user } = await identityService.requireIdentity(request)
-    return { account, user }
+    const { account, user, capabilities } = await identityService.requireIdentity(request)
+    return { account, user, capabilities }
   })
 }

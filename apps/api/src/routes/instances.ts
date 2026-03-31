@@ -43,6 +43,12 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
     }
   }
 
+  function assertRailwayCreateAllowed(canCreateRailwayService: boolean) {
+    if (env.INFRA_PROVIDER === 'railway' && !canCreateRailwayService) {
+      throw new HttpError(403, 'Railway service creation is currently disabled for this account')
+    }
+  }
+
   app.get('/instances', async (request) => {
     const { account } = await identityService.requireIdentity(request)
     return instanceService.listInstances(account.id)
@@ -51,7 +57,8 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
   app.post('/instances', async (request, reply) => {
     assertAutomaticProvisioningMode()
     const input = createInstanceSchema.parse(request.body)
-    const { account } = await identityService.requireIdentity(request)
+    const { account, capabilities } = await identityService.requireIdentity(request)
+    assertRailwayCreateAllowed(capabilities.canCreateRailwayService)
     const instance = await instanceService.createInstance({
       accountId: account.id,
       clawName: input.clawName,

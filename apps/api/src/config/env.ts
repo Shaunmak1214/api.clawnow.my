@@ -54,6 +54,7 @@ const envSchema = z.object({
   CLAWNOW_RAILWAY_VOLUME_REGION: z.string().optional(),
   CLAWNOW_RAILWAY_TARGET_PORT: z.coerce.number().int().positive().default(8080),
   CLAWNOW_RAILWAY_INTERNAL_GATEWAY_PORT: z.coerce.number().int().positive().default(18789),
+  CLAWNOW_RAILWAY_CREATE_ALLOWLIST_EMAILS: z.string().default(''),
   BACKUP_PROVIDER: z.enum(['s3']).default('s3'),
   BACKUP_BUCKET: z.string().min(1).default('clawnow-backups'),
   S3_ENDPOINT: z.string().optional(),
