@@ -16,7 +16,7 @@ function currentProvider(): Provider {
 
 function defaultSizeSlug() {
   if (env.INFRA_PROVIDER === 'railway') {
-    return env.RAILWAY_TEMPLATE_REPO
+    return env.CLAWNOW_RAILWAY_TEMPLATE_REPO
   }
 
   return env.INFRA_PROVIDER === 'contabo' ? env.CONTABO_DEFAULT_PRODUCT_ID : env.DIGITALOCEAN_DEFAULT_SIZE

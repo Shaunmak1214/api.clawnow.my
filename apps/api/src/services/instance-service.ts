@@ -237,7 +237,7 @@ export class InstanceService {
 
     const hostStatePath =
       env.INFRA_PROVIDER === 'railway'
-        ? env.RAILWAY_VOLUME_MOUNT_PATH
+        ? env.CLAWNOW_RAILWAY_VOLUME_MOUNT_PATH
         : hostStatePathForInstance(instance.id)
     const volume = await this.infra.createVolume({
       instanceId: instance.id,

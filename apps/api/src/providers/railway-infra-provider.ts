@@ -198,24 +198,24 @@ function formatGraphqlErrorMessage(
     return rawMessage
   }
 
-  if (env.RAILWAY_TOKEN_TYPE !== 'project') {
+  if (env.CLAWNOW_RAILWAY_TOKEN_TYPE !== 'project') {
     return rawMessage
   }
 
   const targetProjectId =
     asString(variables?.projectId) ||
-    env.RAILWAY_PROJECT_ID ||
+    env.CLAWNOW_RAILWAY_PROJECT_ID ||
     'unknown-project'
   const targetEnvironmentId =
     asString(variables?.environmentId) ||
-    env.RAILWAY_ENVIRONMENT_ID ||
+    env.CLAWNOW_RAILWAY_ENVIRONMENT_ID ||
     'unknown-environment'
 
   return [
     rawMessage,
     `Railway project tokens only work against the project they were created for.`,
     `Request targeted projectId=${targetProjectId} environmentId=${targetEnvironmentId} using Project-Access-Token.`,
-    `Verify RAILWAY_API_TOKEN belongs to that same Railway project, or switch to RAILWAY_TOKEN_TYPE=workspace/account with a bearer token.`,
+    `Verify CLAWNOW_RAILWAY_API_TOKEN belongs to that same Railway project, or switch to CLAWNOW_RAILWAY_TOKEN_TYPE=workspace/account with a bearer token.`,
   ].join(' ')
 }
 
@@ -235,9 +235,9 @@ export class RailwayInfraProvider implements InfraProvider {
       maxInstances: input.maxInstances,
     })
 
-    if (!env.RAILWAY_API_TOKEN) {
+    if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
       logRailway('createVm.dryrun', {
-        reason: 'RAILWAY_API_TOKEN missing',
+        reason: 'CLAWNOW_RAILWAY_API_TOKEN missing',
       })
       const id = makeProviderVmId({
         projectId: `dryrun-project-${randomUUID()}`,
@@ -260,8 +260,13 @@ export class RailwayInfraProvider implements InfraProvider {
       }
     }
 
-    if (env.RAILWAY_TOKEN_TYPE === 'project' && (!env.RAILWAY_PROJECT_ID || !env.RAILWAY_ENVIRONMENT_ID)) {
-      throw new Error('RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID are required when RAILWAY_TOKEN_TYPE=project')
+    if (
+      env.CLAWNOW_RAILWAY_TOKEN_TYPE === 'project' &&
+      (!env.CLAWNOW_RAILWAY_PROJECT_ID || !env.CLAWNOW_RAILWAY_ENVIRONMENT_ID)
+    ) {
+      throw new Error(
+        'CLAWNOW_RAILWAY_PROJECT_ID and CLAWNOW_RAILWAY_ENVIRONMENT_ID are required when CLAWNOW_RAILWAY_TOKEN_TYPE=project',
+      )
     }
 
     const projectName = sanitizeName(input.hostname || `clawnow-${randomUUID().slice(0, 8)}`)
@@ -273,8 +278,8 @@ export class RailwayInfraProvider implements InfraProvider {
         projectId,
         environmentId,
         name: projectName,
-        repo: env.RAILWAY_TEMPLATE_REPO,
-        branch: env.RAILWAY_TEMPLATE_BRANCH,
+        repo: env.CLAWNOW_RAILWAY_TEMPLATE_REPO,
+        branch: env.CLAWNOW_RAILWAY_TEMPLATE_BRANCH,
       })
 
       const provisionedVm = {
@@ -313,10 +318,10 @@ export class RailwayInfraProvider implements InfraProvider {
   }
 
   async getVm(providerVmId: string): Promise<ProvisionedVm | null> {
-    if (!env.RAILWAY_API_TOKEN) {
+    if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
       logRailway('getVm.skipped', {
         providerVmId,
-        reason: 'RAILWAY_API_TOKEN missing',
+        reason: 'CLAWNOW_RAILWAY_API_TOKEN missing',
       })
       return null
     }
@@ -380,7 +385,7 @@ export class RailwayInfraProvider implements InfraProvider {
       name: serviceId,
       hostname: serviceId,
       region: 'railway',
-      sizeSlug: env.RAILWAY_TEMPLATE_REPO,
+      sizeSlug: env.CLAWNOW_RAILWAY_TEMPLATE_REPO,
       cpuTotalMillicores: 0,
       memoryTotalMb: 0,
       diskTotalGb: 5,
@@ -391,10 +396,10 @@ export class RailwayInfraProvider implements InfraProvider {
   }
 
   async deleteVm(providerVmId: string): Promise<void> {
-    if (!env.RAILWAY_API_TOKEN) {
+    if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
       logRailway('deleteVm.skipped', {
         providerVmId,
-        reason: 'RAILWAY_API_TOKEN missing',
+        reason: 'CLAWNOW_RAILWAY_API_TOKEN missing',
       })
       return
     }
@@ -448,7 +453,7 @@ export class RailwayInfraProvider implements InfraProvider {
       sizeGb: input.sizeGb,
     })
 
-    if (!env.RAILWAY_API_TOKEN) {
+    if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
       logRailway('createVolume.dryrun', {
         instanceId: input.instanceId,
       })
@@ -495,7 +500,7 @@ export class RailwayInfraProvider implements InfraProvider {
         `,
         {
           ...variables,
-          region: env.RAILWAY_VOLUME_REGION,
+          region: env.CLAWNOW_RAILWAY_VOLUME_REGION,
         },
       )
       logRailway('createVolume.withRegion.success', {
@@ -508,7 +513,7 @@ export class RailwayInfraProvider implements InfraProvider {
         projectId,
         environmentId,
         serviceId,
-        region: env.RAILWAY_VOLUME_REGION,
+        region: env.CLAWNOW_RAILWAY_VOLUME_REGION,
       })
       response = await this.graphql(
         `
@@ -594,7 +599,7 @@ export class RailwayInfraProvider implements InfraProvider {
       mountPath: input.mountPath,
     })
 
-    if (!env.RAILWAY_API_TOKEN) {
+    if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
       logRailway('configureInstanceRuntime.dryrun', {
         instanceId: input.instanceId,
       })
@@ -630,8 +635,8 @@ export class RailwayInfraProvider implements InfraProvider {
               OPENCLAW_WORKSPACE_DIR: `${input.mountPath}/workspace`,
               OPENCLAW_VERSION: input.imageTag,
               OPENCLAW_GATEWAY_TOKEN: randomBytesToken(),
-              PORT: String(env.RAILWAY_TARGET_PORT),
-              INTERNAL_GATEWAY_PORT: String(env.RAILWAY_INTERNAL_GATEWAY_PORT),
+              PORT: String(env.CLAWNOW_RAILWAY_TARGET_PORT),
+              INTERNAL_GATEWAY_PORT: String(env.CLAWNOW_RAILWAY_INTERNAL_GATEWAY_PORT),
             },
           },
         },
@@ -685,7 +690,7 @@ export class RailwayInfraProvider implements InfraProvider {
   private async createProject(name: string) {
     logRailway('createProject.start', {
       name,
-      workspaceId: env.RAILWAY_WORKSPACE_ID || null,
+      workspaceId: env.CLAWNOW_RAILWAY_WORKSPACE_ID || null,
     })
     const response = await this.graphql<{
       projectCreate?: { id?: string } | null
@@ -699,7 +704,7 @@ export class RailwayInfraProvider implements InfraProvider {
       `,
       {
         name,
-        workspaceId: env.RAILWAY_WORKSPACE_ID,
+        workspaceId: env.CLAWNOW_RAILWAY_WORKSPACE_ID,
       },
     )
 
@@ -717,13 +722,13 @@ export class RailwayInfraProvider implements InfraProvider {
   }
 
   private getFixedProjectConfig() {
-    if (!env.RAILWAY_PROJECT_ID || !env.RAILWAY_ENVIRONMENT_ID) {
+    if (!env.CLAWNOW_RAILWAY_PROJECT_ID || !env.CLAWNOW_RAILWAY_ENVIRONMENT_ID) {
       return null
     }
 
     return {
-      projectId: env.RAILWAY_PROJECT_ID,
-      environmentId: env.RAILWAY_ENVIRONMENT_ID,
+      projectId: env.CLAWNOW_RAILWAY_PROJECT_ID,
+      environmentId: env.CLAWNOW_RAILWAY_ENVIRONMENT_ID,
     }
   }
 
@@ -900,7 +905,7 @@ export class RailwayInfraProvider implements InfraProvider {
         {
           serviceId: input.serviceId,
           environmentId: input.environmentId,
-          targetPort: env.RAILWAY_TARGET_PORT,
+          targetPort: env.CLAWNOW_RAILWAY_TARGET_PORT,
         },
       )
 
@@ -979,24 +984,25 @@ export class RailwayInfraProvider implements InfraProvider {
   }
 
   private async graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-    if (!env.RAILWAY_API_TOKEN) {
-      throw new Error('RAILWAY_API_TOKEN is not configured')
+    if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
+      throw new Error('CLAWNOW_RAILWAY_API_TOKEN is not configured')
     }
 
     const operationMatch = query.match(/(?:mutation|query)\s+([A-Za-z0-9_]+)/)
     const operationName = operationMatch?.[1] || 'anonymous'
-    const authHeaderName = env.RAILWAY_TOKEN_TYPE === 'project' ? 'Project-Access-Token' : 'Authorization'
+    const authHeaderName =
+      env.CLAWNOW_RAILWAY_TOKEN_TYPE === 'project' ? 'Project-Access-Token' : 'Authorization'
     const authHeaderValue =
-      env.RAILWAY_TOKEN_TYPE === 'project'
-        ? env.RAILWAY_API_TOKEN
-        : `Bearer ${env.RAILWAY_API_TOKEN}`
+      env.CLAWNOW_RAILWAY_TOKEN_TYPE === 'project'
+        ? env.CLAWNOW_RAILWAY_API_TOKEN
+        : `Bearer ${env.CLAWNOW_RAILWAY_API_TOKEN}`
     logRailway('graphql.request', {
       operationName,
       authHeaderName,
       variableKeys: variables ? Object.keys(variables) : [],
     })
 
-    const response = await fetch(env.RAILWAY_GRAPHQL_URL, {
+    const response = await fetch(env.CLAWNOW_RAILWAY_GRAPHQL_URL, {
       method: 'POST',
       headers: {
         [authHeaderName]: authHeaderValue,
