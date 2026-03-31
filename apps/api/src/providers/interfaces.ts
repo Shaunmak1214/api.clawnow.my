@@ -12,6 +12,7 @@ export interface ProvisionedVm {
   memoryTotalMb: number
   diskTotalGb: number
   maxInstances: number
+  status?: 'PROVISIONING' | 'ACTIVE' | 'OFFLINE' | 'FAILED'
 }
 
 export interface ProvisionedVolume {
@@ -30,15 +31,30 @@ export interface InfraProvider {
     hostname?: string
     userData?: string
   }): Promise<ProvisionedVm>
+  getVm(providerVmId: string): Promise<ProvisionedVm | null>
   deleteVm(providerVmId: string): Promise<void>
   createVolume(input: {
     instanceId: string
+    providerVmId?: string
     region: string
     sizeGb: number
     mountPath: string
   }): Promise<ProvisionedVolume>
   attachVolume(input: { providerVmId: string; providerVolumeId: string }): Promise<void>
   detachVolume(input: { providerVmId: string; providerVolumeId: string }): Promise<void>
+  configureInstanceRuntime?(input: {
+    providerVmId: string
+    instanceId: string
+    name: string
+    region: string
+    imageTag: string
+    setupPassword: string
+    mountPath: string
+  }): Promise<{
+    providerVmId?: string
+    publicUrl?: string
+    status?: ProvisionedVm['status']
+  }>
 }
 
 export interface BackupProvider {

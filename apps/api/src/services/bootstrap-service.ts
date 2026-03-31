@@ -80,9 +80,10 @@ export class BootstrapService {
     sizeSlug: string
     maxInstances: number
   }) {
-    const bundleUrl = `${env.PUBLIC_API_BASE_URL}/downloads/host-agent.mjs`
+    const bootstrapApiBaseUrl = env.BOOTSTRAP_PUBLIC_API_BASE_URL || env.PUBLIC_API_BASE_URL
+    const bundleUrl = `${bootstrapApiBaseUrl}/downloads/host-agent.mjs`
     const envFile = [
-      `API_BASE_URL=${env.PUBLIC_API_BASE_URL}`,
+      `API_BASE_URL=${bootstrapApiBaseUrl}`,
       `AGENT_SHARED_SECRET=${env.AGENT_SHARED_SECRET}`,
       `BOOTSTRAP_TOKEN=${input.bootstrapToken}`,
       `HOSTNAME=${input.hostname}`,
@@ -134,12 +135,13 @@ ${sudoersRule
   .join('\n')}
 runcmd:
   - apt-get update
-  - apt-get install -y ca-certificates curl openssh-server sudo
+  - apt-get install -y ca-certificates curl gnupg openssh-server sudo
   - mkdir -p /opt/clawnow-host-agent
   - mkdir -p /etc/clawnow-instance-users
   - getent group clawnow-instance-users >/dev/null || groupadd --system clawnow-instance-users
   - systemctl enable --now ssh
   - systemctl restart ssh
+  - bash -lc "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -"
   - apt-get install -y docker.io nodejs
   - systemctl enable --now docker
   - curl -fsSL ${shellQuote(bundleUrl)} -o /opt/clawnow-host-agent/host-agent.mjs

@@ -7,11 +7,23 @@ import { createInfraProvider } from '../providers/infra-provider-factory.js'
 import { BootstrapService } from './bootstrap-service.js'
 
 function currentProvider(): Provider {
+  if (env.INFRA_PROVIDER === 'railway') {
+    return 'RAILWAY'
+  }
+
   return env.INFRA_PROVIDER === 'contabo' ? 'CONTABO' : 'DIGITALOCEAN'
 }
 
 function defaultSizeSlug() {
+  if (env.INFRA_PROVIDER === 'railway') {
+    return env.RAILWAY_TEMPLATE_REPO
+  }
+
   return env.INFRA_PROVIDER === 'contabo' ? env.CONTABO_DEFAULT_PRODUCT_ID : env.DIGITALOCEAN_DEFAULT_SIZE
+}
+
+function defaultMaxInstances() {
+  return env.INFRA_PROVIDER === 'digitalocean' ? 2 : 1
 }
 
 function normalizeProvisioningRegion(region: string) {
@@ -39,21 +51,26 @@ export class VmService {
     })
   }
 
-  async ensureVmForRegion(region: string) {
-    const hostname = `clawnow-${randomUUID().slice(0, 8)}`
-    const bootstrapToken = this.bootstrapService.createBootstrapToken()
-    const userData = this.bootstrapService.buildCloudInit({
-      bootstrapToken,
-      hostname,
-      region: normalizeProvisioningRegion(region),
-      sizeSlug: defaultSizeSlug(),
-      maxInstances: 2,
-    })
+  async ensureVmForRegion(region: string, options?: { hostname?: string }) {
+    const hostname = options?.hostname?.trim() || `clawnow-${randomUUID().slice(0, 8)}`
+    const maxInstances = defaultMaxInstances()
+    const bootstrapToken = env.INFRA_PROVIDER === 'railway' ? null : this.bootstrapService.createBootstrapToken()
+    const cloudInitBootstrapToken = bootstrapToken ?? ''
+    const userData =
+      env.INFRA_PROVIDER === 'railway'
+        ? undefined
+        : this.bootstrapService.buildCloudInit({
+            bootstrapToken: cloudInitBootstrapToken,
+            hostname,
+            region: normalizeProvisioningRegion(region),
+            sizeSlug: defaultSizeSlug(),
+            maxInstances,
+          })
 
     const vm = await this.infra.createVm({
       region: normalizeProvisioningRegion(region),
       sizeSlug: defaultSizeSlug(),
-      maxInstances: 2,
+      maxInstances,
       hostname,
       userData,
     })
@@ -72,7 +89,38 @@ export class VmService {
         memoryTotalMb: vm.memoryTotalMb,
         diskTotalGb: vm.diskTotalGb,
         maxInstances: vm.maxInstances,
-        status: 'PROVISIONING',
+        status: vm.status ?? 'PROVISIONING',
+      },
+    })
+  }
+
+  async syncVm(vmId: string) {
+    const vm = await prisma.vm.findUnique({
+      where: { id: vmId },
+    })
+
+    if (!vm) {
+      return null
+    }
+
+    const providerVm = await this.infra.getVm(vm.providerVmId)
+    if (!providerVm) {
+      return vm
+    }
+
+    return prisma.vm.update({
+      where: { id: vm.id },
+      data: {
+        name: providerVm.name || vm.name,
+        hostname: providerVm.hostname || vm.hostname,
+        publicIp: providerVm.publicIp ?? vm.publicIp,
+        region: providerVm.region || vm.region,
+        sizeSlug: providerVm.sizeSlug || vm.sizeSlug,
+        cpuTotalMillicores: providerVm.cpuTotalMillicores > 0 ? providerVm.cpuTotalMillicores : vm.cpuTotalMillicores,
+        memoryTotalMb: providerVm.memoryTotalMb > 0 ? providerVm.memoryTotalMb : vm.memoryTotalMb,
+        diskTotalGb: providerVm.diskTotalGb > 0 ? providerVm.diskTotalGb : vm.diskTotalGb,
+        maxInstances: providerVm.maxInstances || vm.maxInstances,
+        status: vm.lastHeartbeatAt ? vm.status : providerVm.status ?? vm.status,
       },
     })
   }

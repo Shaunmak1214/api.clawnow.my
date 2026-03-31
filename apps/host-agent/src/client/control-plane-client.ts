@@ -24,7 +24,7 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Agent registration failed: ${response.status}`)
+      throw new Error(`Agent registration failed: ${response.status}${await describeError(response)}`)
     }
 
     return response.json() as Promise<AgentRegistrationResponse>
@@ -38,7 +38,7 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Agent heartbeat failed: ${response.status}`)
+      throw new Error(`Agent heartbeat failed: ${response.status}${await describeError(response)}`)
     }
   }
 
@@ -50,7 +50,7 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Failed to claim jobs: ${response.status}`)
+      throw new Error(`Failed to claim jobs: ${response.status}${await describeError(response)}`)
     }
 
     const body = (await response.json()) as { jobs: ClaimedOperationJob[] }
@@ -64,7 +64,7 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch SSH credentials for ${instanceId}: ${response.status}`)
+      throw new Error(`Failed to fetch SSH credentials for ${instanceId}: ${response.status}${await describeError(response)}`)
     }
 
     return response.json() as Promise<InstanceAccessCredentials>
@@ -80,7 +80,7 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Failed to send logs for ${jobId}: ${response.status}`)
+      throw new Error(`Failed to send logs for ${jobId}: ${response.status}${await describeError(response)}`)
     }
   }
 
@@ -92,7 +92,7 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Failed to complete job ${jobId}: ${response.status}`)
+      throw new Error(`Failed to complete job ${jobId}: ${response.status}${await describeError(response)}`)
     }
   }
 
@@ -104,7 +104,16 @@ export class ControlPlaneClient {
     })
 
     if (!response.ok) {
-      throw new Error(`Failed to fail job ${jobId}: ${response.status}`)
+      throw new Error(`Failed to fail job ${jobId}: ${response.status}${await describeError(response)}`)
     }
+  }
+}
+
+async function describeError(response: Response) {
+  try {
+    const text = await response.text()
+    return text ? ` - ${text}` : ''
+  } catch {
+    return ''
   }
 }

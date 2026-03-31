@@ -1,7 +1,9 @@
 import Fastify from 'fastify'
+import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 
 import { HttpError } from './lib/http-error.js'
+import { logger } from './lib/logger.js'
 import { authRoutes } from './routes/auth.js'
 import { agentRoutes } from './routes/agent.js'
 import { env } from './config/env.js'
@@ -13,13 +15,14 @@ import { planRoutes } from './routes/plans.js'
 
 export async function createApp() {
   const app = Fastify({
-    logger: true,
+    loggerInstance: logger,
   })
 
   await app.register(cors, {
     origin: true,
-    credentials: false,
+    credentials: true,
   })
+  await app.register(cookie)
 
   await app.register(healthRoutes)
   await app.register(authRoutes)

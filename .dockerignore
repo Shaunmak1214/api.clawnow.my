@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.DS_Store
+apps/host-agent
+apps/api/.env
+apps/api/dist
+packages/core/dist
+coverage

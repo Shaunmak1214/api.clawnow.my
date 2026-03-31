@@ -41,6 +41,7 @@ export class DigitalOceanInfraProvider implements InfraProvider {
         memoryTotalMb: 8192,
         diskTotalGb: 160,
         maxInstances: input.maxInstances,
+        status: 'ACTIVE',
       }
     }
 
@@ -89,7 +90,12 @@ export class DigitalOceanInfraProvider implements InfraProvider {
       memoryTotalMb: body.droplet.memory,
       diskTotalGb: body.droplet.disk,
       maxInstances: input.maxInstances,
+      status: 'PROVISIONING',
     }
+  }
+
+  async getVm(_providerVmId: string): Promise<ProvisionedVm | null> {
+    return null
   }
 
   async deleteVm(_providerVmId: string): Promise<void> {
@@ -98,6 +104,7 @@ export class DigitalOceanInfraProvider implements InfraProvider {
 
   async createVolume(input: {
     instanceId: string
+    providerVmId?: string
     region: string
     sizeGb: number
     mountPath: string

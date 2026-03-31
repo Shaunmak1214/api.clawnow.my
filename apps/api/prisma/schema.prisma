@@ -10,6 +10,7 @@ datasource db {
 enum Provider {
   DIGITALOCEAN
   CONTABO
+  RAILWAY
   AWS
 }
 

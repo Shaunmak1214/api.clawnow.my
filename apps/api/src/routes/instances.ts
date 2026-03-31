@@ -7,9 +7,15 @@ import { IdentityService } from '../services/identity-service.js'
 import { InstanceService } from '../services/instance-service.js'
 
 const createInstanceSchema = z.object({
-  name: z.string().min(1),
-  region: z.string().default('sgp1'),
-  imageTag: z.string().default('latest'),
+  clawName: z.string().trim().min(1),
+  region: z.string().default(
+    env.INFRA_PROVIDER === 'railway'
+      ? 'railway'
+      : env.INFRA_PROVIDER === 'contabo'
+        ? env.CONTABO_DEFAULT_REGION
+        : env.DIGITALOCEAN_DEFAULT_REGION,
+  ),
+  imageTag: z.string().min(1).optional(),
   sizeProfile: z.enum(['small', 'medium']).default('small'),
 })
 
@@ -48,7 +54,11 @@ export const instanceRoutes: FastifyPluginAsync = async (app) => {
     const { account } = await identityService.requireIdentity(request)
     const instance = await instanceService.createInstance({
       accountId: account.id,
-      ...input,
+      clawName: input.clawName,
+      name: input.clawName,
+      region: input.region,
+      sizeProfile: input.sizeProfile,
+      imageTag: input.imageTag ?? env.OPENCLAW_DEFAULT_IMAGE_TAG,
     })
     reply.code(201)
     return instance

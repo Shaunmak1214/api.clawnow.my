@@ -1,4 +1,5 @@
-import type { FastifyRequest } from 'fastify'
+import type { CookieSerializeOptions } from '@fastify/cookie'
+import type { FastifyReply, FastifyRequest } from 'fastify'
 import bcrypt from 'bcryptjs'
 import jwt, { type JwtPayload, type Secret, type SignOptions } from 'jsonwebtoken'
 
@@ -94,6 +95,14 @@ export class IdentityService {
     return
   }
 
+  setAuthCookie(reply: FastifyReply, accessToken: string) {
+    reply.setCookie(env.SESSION_COOKIE_NAME, accessToken, this.cookieOptions())
+  }
+
+  clearAuthCookie(reply: FastifyReply) {
+    reply.clearCookie(env.SESSION_COOKIE_NAME, this.cookieOptions())
+  }
+
   async requireIdentity(request: FastifyRequest) {
     const token = this.extractBearerToken(request)
     if (!token) {
@@ -146,15 +155,38 @@ export class IdentityService {
 
   private extractBearerToken(request: FastifyRequest) {
     const header = request.headers.authorization
-    if (!header) return null
+    if (header) {
+      const [scheme, token] = header.split(' ')
+      if (scheme === 'Bearer' && token) {
+        return token
+      }
+    }
 
-    const [scheme, token] = header.split(' ')
-    if (scheme !== 'Bearer' || !token) return null
-    return token
+    const cookieToken = request.cookies?.[env.SESSION_COOKIE_NAME]
+    if (typeof cookieToken === 'string' && cookieToken.length > 0) {
+      return cookieToken
+    }
+
+    return null
   }
 
   private sanitizeUser<T extends { passwordHash: string }>(user: T) {
     const { passwordHash, ...rest } = user
     return rest
+  }
+
+  private cookieOptions(): CookieSerializeOptions {
+    const apiBaseUrl = env.PUBLIC_API_BASE_URL.toLowerCase()
+    const frontendOrigin = env.FRONTEND_ORIGIN.toLowerCase()
+    const isSecure = apiBaseUrl.startsWith('https://') || frontendOrigin.startsWith('https://')
+
+    return {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isSecure,
+      path: '/',
+      maxAge: env.SESSION_TTL_DAYS * 24 * 60 * 60,
+      ...(env.SESSION_COOKIE_DOMAIN ? { domain: env.SESSION_COOKIE_DOMAIN } : {}),
+    }
   }
 }

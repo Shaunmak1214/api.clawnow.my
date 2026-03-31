@@ -61,6 +61,69 @@ interface AccessToken {
   expiresAt: number
 }
 
+interface ContaboInstanceRecord {
+  instanceId: number
+  name?: string
+  displayName?: string
+  region?: string
+  productId?: string
+  status?: string
+  ipConfig?: {
+    v4?: {
+      ip?: string
+    }
+  }
+  cpuCores?: number
+  ramMb?: string | number
+  diskMb?: string | number
+}
+
+function toInt(value: string | number | undefined) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  return 0
+}
+
+function toDiskGb(diskMb: string | number | undefined) {
+  const mb = toInt(diskMb)
+  return mb > 0 ? Math.ceil(mb / 1024) : 0
+}
+
+function mapVmStatus(status?: string): ProvisionedVm['status'] {
+  switch ((status || '').trim().toLowerCase()) {
+    case 'running':
+    case 'stopped':
+      return 'ACTIVE'
+    case 'error':
+    case 'product_not_available':
+    case 'verification_required':
+    case 'pending_payment':
+    case 'other':
+      return 'FAILED'
+    case 'uninstalled':
+    case 'rescue':
+      return 'OFFLINE'
+    case 'provisioning':
+    case 'installing':
+    case 'manual_provisioning':
+    case 'reset_password':
+    case 'unknown':
+    default:
+      return 'PROVISIONING'
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export class ContaboInfraProvider implements InfraProvider {
   private accessToken: AccessToken | null = null
 
@@ -84,6 +147,8 @@ export class ContaboInfraProvider implements InfraProvider {
         memoryTotalMb: 12288,
         diskTotalGb: 150,
         maxInstances: input.maxInstances,
+        publicIp: '203.0.113.10',
+        status: 'ACTIVE',
       }
     }
 
@@ -141,18 +206,66 @@ export class ContaboInfraProvider implements InfraProvider {
       throw new Error('Failed to create Contabo VM: response did not include an instance id')
     }
 
-    return {
-      provider: provider(),
-      providerVmId: String(created.instanceId),
-      name: String(created.instanceId),
-      hostname: input.hostname || `clawnow-${String(created.instanceId).slice(0, 8)}`,
+    const providerVmId = String(created.instanceId)
+    const fallbackHostname = input.hostname || `clawnow-${providerVmId.slice(0, 8)}`
+    const syncedVm = await this.waitForVm(providerVmId, {
       region: mapRegion(input.region),
       sizeSlug: input.sizeSlug,
-      cpuTotalMillicores: 0,
-      memoryTotalMb: 0,
-      diskTotalGb: 0,
+      hostname: fallbackHostname,
       maxInstances: input.maxInstances,
+    })
+
+    return (
+      syncedVm || {
+        provider: provider(),
+        providerVmId,
+        name: created.instanceId.toString(),
+        hostname: fallbackHostname,
+        region: mapRegion(input.region),
+        sizeSlug: input.sizeSlug,
+        cpuTotalMillicores: 0,
+        memoryTotalMb: 0,
+        diskTotalGb: 0,
+        maxInstances: input.maxInstances,
+        status: mapVmStatus(created.status),
+      }
+    )
+  }
+
+  async getVm(providerVmId: string): Promise<ProvisionedVm | null> {
+    if (!env.CONTABO_CLIENT_ID || !env.CONTABO_CLIENT_SECRET || !env.CONTABO_API_USER || !env.CONTABO_API_PASSWORD) {
+      return null
     }
+
+    const token = await this.getAccessToken()
+    const response = await fetch(`${CONTABO_API_URL}/compute/instances/${providerVmId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'x-request-id': randomUUID(),
+      },
+    })
+
+    if (response.status === 404) {
+      return null
+    }
+
+    if (!response.ok) {
+      const message = await describeError(response)
+      throw new Error(`Failed to fetch Contabo VM ${providerVmId}: ${response.status}${message ? ` - ${message}` : ''}`)
+    }
+
+    const body = (await response.json()) as {
+      data?: ContaboInstanceRecord[]
+    }
+
+    const instance = body.data?.[0]
+    if (!instance?.instanceId) {
+      return null
+    }
+
+    return this.mapInstance(instance)
   }
 
   async deleteVm(providerVmId: string): Promise<void> {
@@ -181,13 +294,14 @@ export class ContaboInfraProvider implements InfraProvider {
 
   async createVolume(input: {
     instanceId: string
+    providerVmId?: string
     region: string
     sizeGb: number
     mountPath: string
   }): Promise<ProvisionedVolume> {
     return {
       provider: provider(),
-      providerVolumeId: `logical-${input.instanceId}`,
+      providerVolumeId: `local-disk-${input.instanceId}`,
       region: mapRegion(input.region),
       sizeGb: input.sizeGb,
       mountPath: input.mountPath || `${PATHS.hostInstancesRoot}/${input.instanceId}`,
@@ -244,6 +358,72 @@ export class ContaboInfraProvider implements InfraProvider {
     }
 
     return this.accessToken.token
+  }
+
+  private mapInstance(instance: ContaboInstanceRecord): ProvisionedVm {
+    const hostname = instance.name || `clawnow-${String(instance.instanceId).slice(0, 8)}`
+
+    return {
+      provider: provider(),
+      providerVmId: String(instance.instanceId),
+      name: instance.displayName || hostname,
+      hostname,
+      publicIp: instance.ipConfig?.v4?.ip,
+      region: instance.region || env.CONTABO_DEFAULT_REGION,
+      sizeSlug: instance.productId || env.CONTABO_DEFAULT_PRODUCT_ID,
+      cpuTotalMillicores: toInt(instance.cpuCores) * 1000,
+      memoryTotalMb: toInt(instance.ramMb),
+      diskTotalGb: toDiskGb(instance.diskMb),
+      maxInstances: 1,
+      status: mapVmStatus(instance.status),
+    }
+  }
+
+  private async waitForVm(
+    providerVmId: string,
+    fallback: {
+      region: string
+      sizeSlug: string
+      hostname: string
+      maxInstances: number
+    },
+  ) {
+    let latestVm: ProvisionedVm | null = null
+
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      latestVm = await this.getVm(providerVmId)
+
+      if (
+        latestVm &&
+        latestVm.publicIp &&
+        latestVm.cpuTotalMillicores > 0 &&
+        latestVm.memoryTotalMb > 0 &&
+        latestVm.diskTotalGb > 0 &&
+        latestVm.status !== 'PROVISIONING'
+      ) {
+        return latestVm
+      }
+
+      await sleep(4000)
+    }
+
+    if (latestVm) {
+      return latestVm
+    }
+
+    return {
+      provider: provider(),
+      providerVmId,
+      name: fallback.hostname,
+      hostname: fallback.hostname,
+      region: fallback.region,
+      sizeSlug: fallback.sizeSlug,
+      cpuTotalMillicores: 0,
+      memoryTotalMb: 0,
+      diskTotalGb: 0,
+      maxInstances: fallback.maxInstances,
+      status: 'PROVISIONING' as const,
+    }
   }
 }
 
