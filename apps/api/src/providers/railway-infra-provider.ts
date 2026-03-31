@@ -189,6 +189,36 @@ function pickDomain(value: unknown): string | undefined {
   return undefined
 }
 
+function formatGraphqlErrorMessage(
+  operationName: string,
+  rawMessage: string,
+  variables?: Record<string, unknown>,
+) {
+  if (!/not authorized/i.test(rawMessage)) {
+    return rawMessage
+  }
+
+  if (env.RAILWAY_TOKEN_TYPE !== 'project') {
+    return rawMessage
+  }
+
+  const targetProjectId =
+    asString(variables?.projectId) ||
+    env.RAILWAY_PROJECT_ID ||
+    'unknown-project'
+  const targetEnvironmentId =
+    asString(variables?.environmentId) ||
+    env.RAILWAY_ENVIRONMENT_ID ||
+    'unknown-environment'
+
+  return [
+    rawMessage,
+    `Railway project tokens only work against the project they were created for.`,
+    `Request targeted projectId=${targetProjectId} environmentId=${targetEnvironmentId} using Project-Access-Token.`,
+    `Verify RAILWAY_API_TOKEN belongs to that same Railway project, or switch to RAILWAY_TOKEN_TYPE=workspace/account with a bearer token.`,
+  ].join(' ')
+}
+
 export class RailwayInfraProvider implements InfraProvider {
   async createVm(input: {
     region: string
@@ -992,12 +1022,17 @@ export class RailwayInfraProvider implements InfraProvider {
     }
 
     if (body.errors?.length) {
+      const message = formatGraphqlErrorMessage(
+        operationName,
+        body.errors.map((error) => error.message || 'Unknown Railway GraphQL error').join(' | '),
+        variables,
+      )
       logRailwayError(
         'graphql.response',
-        body.errors.map((error) => error.message || 'Unknown Railway GraphQL error').join(' | '),
+        message,
         { operationName },
       )
-      throw new Error(body.errors.map((error) => error.message || 'Unknown Railway GraphQL error').join(' | '))
+      throw new Error(message)
     }
 
     if (!body.data) {
