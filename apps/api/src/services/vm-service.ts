@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { env } from '../config/env.js'
 import { prisma } from '../lib/prisma.js'
-import type { Provider } from '@prisma/client'
+import type { Provider, VmStatus } from '@prisma/client'
 import { createInfraProvider } from '../providers/infra-provider-factory.js'
 import { BootstrapService } from './bootstrap-service.js'
 
@@ -36,6 +36,53 @@ function normalizeProvisioningRegion(region: string) {
     return 'SIN'
   }
   return region
+}
+
+export function mergeVmSyncInput<
+  TCurrentVm extends {
+    providerVmId: string
+    name: string
+    hostname: string
+    publicIp: string | null
+    region: string
+    sizeSlug: string
+    cpuTotalMillicores: number
+    memoryTotalMb: number
+    diskTotalGb: number
+    maxInstances: number
+    lastHeartbeatAt?: Date | null
+    status: VmStatus
+  },
+  TProviderVm extends {
+    providerVmId: string
+    name: string
+    hostname: string
+    publicIp?: string
+    region: string
+    sizeSlug: string
+    cpuTotalMillicores: number
+    memoryTotalMb: number
+    diskTotalGb: number
+    maxInstances: number
+    status?: VmStatus
+  },
+>(vm: TCurrentVm, providerVm: TProviderVm) {
+  return {
+    providerVmId: providerVm.providerVmId || vm.providerVmId,
+    name: providerVm.name || vm.name,
+    hostname: providerVm.hostname || vm.hostname,
+    publicIp: providerVm.publicIp ?? vm.publicIp,
+    region: providerVm.region || vm.region,
+    sizeSlug: providerVm.sizeSlug || vm.sizeSlug,
+    cpuTotalMillicores:
+      providerVm.cpuTotalMillicores > 0 ? providerVm.cpuTotalMillicores : vm.cpuTotalMillicores,
+    memoryTotalMb:
+      providerVm.memoryTotalMb > 0 ? providerVm.memoryTotalMb : vm.memoryTotalMb,
+    diskTotalGb:
+      providerVm.diskTotalGb > 0 ? providerVm.diskTotalGb : vm.diskTotalGb,
+    maxInstances: providerVm.maxInstances || vm.maxInstances,
+    status: vm.lastHeartbeatAt ? vm.status : providerVm.status ?? vm.status,
+  }
 }
 
 export class VmService {
@@ -110,18 +157,7 @@ export class VmService {
 
     return prisma.vm.update({
       where: { id: vm.id },
-      data: {
-        name: providerVm.name || vm.name,
-        hostname: providerVm.hostname || vm.hostname,
-        publicIp: providerVm.publicIp ?? vm.publicIp,
-        region: providerVm.region || vm.region,
-        sizeSlug: providerVm.sizeSlug || vm.sizeSlug,
-        cpuTotalMillicores: providerVm.cpuTotalMillicores > 0 ? providerVm.cpuTotalMillicores : vm.cpuTotalMillicores,
-        memoryTotalMb: providerVm.memoryTotalMb > 0 ? providerVm.memoryTotalMb : vm.memoryTotalMb,
-        diskTotalGb: providerVm.diskTotalGb > 0 ? providerVm.diskTotalGb : vm.diskTotalGb,
-        maxInstances: providerVm.maxInstances || vm.maxInstances,
-        status: vm.lastHeartbeatAt ? vm.status : providerVm.status ?? vm.status,
-      },
+      data: mergeVmSyncInput(vm, providerVm),
     })
   }
 

@@ -12,6 +12,7 @@ import { instanceRoutes } from './routes/instances.js'
 import { meRoutes } from './routes/me.js'
 import { onboardingRoutes } from './routes/onboarding.js'
 import { planRoutes } from './routes/plans.js'
+import { railwayRoutes } from './routes/railway.js'
 
 export async function createApp() {
   const app = Fastify({
@@ -31,6 +32,7 @@ export async function createApp() {
   await app.register(onboardingRoutes)
   await app.register(instanceRoutes)
   await app.register(agentRoutes)
+  await app.register(railwayRoutes)
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) {

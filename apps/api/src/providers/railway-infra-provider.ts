@@ -7,6 +7,13 @@ import type { InfraProvider, ProvisionedVm, ProvisionedVolume } from './interfac
 
 type GraphQLRecord = Record<string, unknown>
 
+export type RailwayProjectWebhook = {
+  id: string
+  projectId?: string
+  url: string
+  lastStatus?: string
+}
+
 const RAILWAY_PROVIDER_PREFIX = 'railway'
 
 function logRailway(stage: string, details?: Record<string, unknown>) {
@@ -46,7 +53,7 @@ function makeProviderVmId(input: {
     .join(':')
 }
 
-function parseProviderVmId(providerVmId: string) {
+export function parseRailwayProviderVmId(providerVmId: string) {
   const [prefix, projectId, environmentId, serviceId, deploymentId] = providerVmId.split(':')
   if (prefix !== RAILWAY_PROVIDER_PREFIX || !projectId || !environmentId || !serviceId) {
     throw new Error(`Invalid Railway providerVmId: ${providerVmId}`)
@@ -69,15 +76,20 @@ function sanitizeName(value: string) {
     .slice(0, 50) || `clawnow-${randomUUID().slice(0, 8)}`
 }
 
-function mapDeploymentStatus(status?: string): ProvisionedVm['status'] {
+export function mapRailwayDeploymentStatus(status?: string): ProvisionedVm['status'] {
   switch ((status || '').trim().toUpperCase()) {
+    case 'ACTIVE':
     case 'SUCCESS':
+      return 'ACTIVE'
+    case 'COMPLETED':
+    case 'SKIPPED':
       return 'ACTIVE'
     case 'FAILED':
     case 'CRASHED':
     case 'CANCELED':
       return 'FAILED'
     case 'REMOVED':
+    case 'REMOVING':
       return 'OFFLINE'
     case 'QUEUED':
     case 'WAITING':
@@ -87,6 +99,41 @@ function mapDeploymentStatus(status?: string): ProvisionedVm['status'] {
     case 'SLEEPING':
     default:
       return 'PROVISIONING'
+  }
+}
+
+export function buildRailwayVmSnapshot(input: {
+  projectId: string
+  environmentId: string
+  serviceId: string
+  deploymentId?: string
+  latestDeploymentId?: string
+  deploymentStatus?: string
+  latestDeploymentStatus?: string
+  publicUrl?: string
+  serviceName?: string
+}): ProvisionedVm {
+  const resolvedDeploymentId = input.latestDeploymentId || input.deploymentId
+  const resolvedDeploymentStatus = input.latestDeploymentStatus || input.deploymentStatus
+
+  return {
+    provider: provider(),
+    providerVmId: makeProviderVmId({
+      projectId: input.projectId,
+      environmentId: input.environmentId,
+      serviceId: input.serviceId,
+      deploymentId: resolvedDeploymentId,
+    }),
+    name: input.serviceName || input.serviceId,
+    hostname: input.serviceName || input.serviceId,
+    region: 'railway',
+    sizeSlug: env.CLAWNOW_RAILWAY_TEMPLATE_REPO,
+    cpuTotalMillicores: 0,
+    memoryTotalMb: 0,
+    diskTotalGb: 5,
+    maxInstances: 1,
+    status: mapRailwayDeploymentStatus(resolvedDeploymentStatus),
+    publicIp: input.publicUrl,
   }
 }
 
@@ -108,6 +155,29 @@ function pickId(value: unknown): string | undefined {
     return undefined
   }
   return asString(object.id)
+}
+
+function collectConnectionNodes(value: unknown): GraphQLRecord[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => asObject(item)).filter(Boolean) as GraphQLRecord[]
+  }
+
+  const object = asObject(value)
+  if (!object) {
+    return []
+  }
+
+  const edges = Array.isArray(object.edges) ? object.edges : []
+  if (edges.length > 0) {
+    return edges.map((edge) => asObject(asObject(edge)?.node)).filter(Boolean) as GraphQLRecord[]
+  }
+
+  const nodes = Array.isArray(object.nodes) ? object.nodes : []
+  if (nodes.length > 0) {
+    return nodes.map((node) => asObject(node)).filter(Boolean) as GraphQLRecord[]
+  }
+
+  return []
 }
 
 function collectEnvironmentNodes(value: unknown): Array<{ id: string; name?: string; isEphemeral?: boolean }> {
@@ -189,6 +259,83 @@ function pickDomain(value: unknown): string | undefined {
   return undefined
 }
 
+function normalizeWebhookUrl(url: string) {
+  return url.replace(/\/+$/, '')
+}
+
+function parseRailwayWebhook(value: unknown): RailwayProjectWebhook | null {
+  const object = asObject(value)
+  if (!object) {
+    return null
+  }
+
+  const id = asString(object.id)
+  const url = asString(object.url)
+
+  if (!id || !url) {
+    return null
+  }
+
+  return {
+    id,
+    url: normalizeWebhookUrl(url),
+    projectId: asString(object.projectId),
+    lastStatus: asString(object.lastStatus),
+  }
+}
+
+function pickDeploymentSnapshot(value: unknown): { id?: string; status?: string } | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const snapshot = pickDeploymentSnapshot(item)
+      if (snapshot) {
+        return snapshot
+      }
+    }
+
+    return null
+  }
+
+  const object = asObject(value)
+  if (!object) {
+    return null
+  }
+
+  const id = asString(object.id)
+  const status = asString(object.status)
+  if (id || status) {
+    return {
+      ...(id ? { id } : {}),
+      ...(status ? { status } : {}),
+    }
+  }
+
+  const edges = Array.isArray(object.edges) ? object.edges : []
+  for (const edge of edges) {
+    const snapshot = pickDeploymentSnapshot(asObject(edge)?.node)
+    if (snapshot) {
+      return snapshot
+    }
+  }
+
+  const nodes = Array.isArray(object.nodes) ? object.nodes : []
+  for (const node of nodes) {
+    const snapshot = pickDeploymentSnapshot(node)
+    if (snapshot) {
+      return snapshot
+    }
+  }
+
+  for (const nested of Object.values(object)) {
+    const snapshot = pickDeploymentSnapshot(nested)
+    if (snapshot) {
+      return snapshot
+    }
+  }
+
+  return null
+}
+
 function formatGraphqlErrorMessage(
   operationName: string,
   rawMessage: string,
@@ -219,7 +366,61 @@ function formatGraphqlErrorMessage(
   ].join(' ')
 }
 
+function isMissingGraphqlField(error: unknown, fieldName: string) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(`Cannot query field "${fieldName}"`)
+}
+
 export class RailwayInfraProvider implements InfraProvider {
+  async ensureProjectWebhook(input: {
+    projectId: string
+    url: string
+  }): Promise<{ created: boolean; webhook: RailwayProjectWebhook }> {
+    const normalizedUrl = normalizeWebhookUrl(input.url)
+
+    try {
+      const existingWebhook = await this.findProjectWebhookByUrl({
+        projectId: input.projectId,
+        url: normalizedUrl,
+      })
+
+      if (existingWebhook) {
+        logRailway('ensureProjectWebhook.reused', {
+          projectId: input.projectId,
+          webhookId: existingWebhook.id,
+          url: existingWebhook.url,
+        })
+
+        return {
+          created: false,
+          webhook: existingWebhook,
+        }
+      }
+    } catch (error) {
+      logRailwayWarn('ensureProjectWebhook.lookupFailed', {
+        projectId: input.projectId,
+        url: normalizedUrl,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    const webhook = await this.createProjectWebhook({
+      projectId: input.projectId,
+      url: normalizedUrl,
+    })
+
+    logRailway('ensureProjectWebhook.created', {
+      projectId: input.projectId,
+      webhookId: webhook.id,
+      url: webhook.url,
+    })
+
+    return {
+      created: true,
+      webhook,
+    }
+  }
+
   async createVm(input: {
     region: string
     sizeSlug: string
@@ -326,8 +527,28 @@ export class RailwayInfraProvider implements InfraProvider {
       return null
     }
 
-    const { projectId, environmentId, serviceId, deploymentId } = parseProviderVmId(providerVmId)
-    let status: ProvisionedVm['status'] = 'PROVISIONING'
+    const { projectId, environmentId, serviceId, deploymentId } = parseRailwayProviderVmId(providerVmId)
+    let deploymentStatus: string | undefined
+    let latestDeploymentId: string | undefined
+    let latestDeploymentStatus: string | undefined
+    let publicUrl: string | undefined
+    let serviceName: string | undefined
+
+    try {
+      const snapshot = await this.getServiceSnapshot(serviceId)
+      latestDeploymentId = snapshot.deploymentId
+      latestDeploymentStatus = snapshot.deploymentStatus
+      publicUrl = snapshot.publicUrl
+      serviceName = snapshot.serviceName
+    } catch (error) {
+      logRailwayWarn('getVm.serviceSnapshotUnavailable', {
+        providerVmId,
+        projectId,
+        environmentId,
+        serviceId,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
 
     if (deploymentId) {
       try {
@@ -344,20 +565,19 @@ export class RailwayInfraProvider implements InfraProvider {
                 status
               }
             }
-          }
           `,
           { deploymentId },
         )
 
-        status = mapDeploymentStatus(response.deployment?.status)
+        deploymentStatus = response.deployment?.status
         logRailway('getVm.deploymentStatus', {
           providerVmId,
           projectId,
           environmentId,
           serviceId,
           deploymentId,
-          deploymentStatus: response.deployment?.status,
-          mappedStatus: status,
+          deploymentStatus,
+          mappedStatus: mapRailwayDeploymentStatus(deploymentStatus),
         })
       } catch (error) {
         logRailwayError('getVm.deploymentStatus', error, {
@@ -367,32 +587,51 @@ export class RailwayInfraProvider implements InfraProvider {
           serviceId,
           deploymentId,
         })
-        throw error
+
+        if (!latestDeploymentStatus) {
+          throw error
+        }
       }
-    } else {
-      logRailwayWarn('getVm.noDeploymentId', {
+    }
+
+    if (!deploymentStatus && !latestDeploymentStatus && !publicUrl && !serviceName) {
+      logRailwayWarn('getVm.unknownStatus', {
         providerVmId,
         projectId,
         environmentId,
         serviceId,
-        assumedStatus: 'PROVISIONING',
+        deploymentId: deploymentId || null,
       })
+      return null
     }
 
-    return {
-      provider: provider(),
+    const snapshot = buildRailwayVmSnapshot({
+      projectId,
+      environmentId,
+      serviceId,
+      deploymentId,
+      latestDeploymentId,
+      deploymentStatus,
+      latestDeploymentStatus,
+      publicUrl,
+      serviceName,
+    })
+
+    logRailway('getVm.snapshot', {
       providerVmId,
-      name: serviceId,
-      hostname: serviceId,
-      region: 'railway',
-      sizeSlug: env.CLAWNOW_RAILWAY_TEMPLATE_REPO,
-      cpuTotalMillicores: 0,
-      memoryTotalMb: 0,
-      diskTotalGb: 5,
-      maxInstances: 1,
-      status,
-      publicIp: undefined,
-    }
+      resolvedProviderVmId: snapshot.providerVmId,
+      projectId,
+      environmentId,
+      serviceId,
+      deploymentId: deploymentId || null,
+      latestDeploymentId: latestDeploymentId || null,
+      deploymentStatus: deploymentStatus || null,
+      latestDeploymentStatus: latestDeploymentStatus || null,
+      publicUrl: publicUrl || null,
+      mappedStatus: snapshot.status,
+    })
+
+    return snapshot
   }
 
   async deleteVm(providerVmId: string): Promise<void> {
@@ -404,7 +643,7 @@ export class RailwayInfraProvider implements InfraProvider {
       return
     }
 
-    const { projectId, serviceId } = parseProviderVmId(providerVmId)
+    const { projectId, serviceId } = parseRailwayProviderVmId(providerVmId)
     logRailway('deleteVm.start', {
       providerVmId,
       projectId,
@@ -414,11 +653,11 @@ export class RailwayInfraProvider implements InfraProvider {
     try {
       await this.graphql(
         `
-          mutation DeleteService($serviceId: String!) {
-            serviceDelete(serviceId: $serviceId)
+          mutation DeleteService($id: String!) {
+            serviceDelete(id: $id)
           }
         `,
-        { serviceId },
+        { id: serviceId },
       )
       logRailway('deleteVm.success', {
         providerVmId,
@@ -466,7 +705,7 @@ export class RailwayInfraProvider implements InfraProvider {
       }
     }
 
-    const { projectId, environmentId, serviceId } = parseProviderVmId(input.providerVmId)
+    const { projectId, environmentId, serviceId } = parseRailwayProviderVmId(input.providerVmId)
     const variables: Record<string, unknown> = {
       projectId,
       environmentId,
@@ -588,7 +827,7 @@ export class RailwayInfraProvider implements InfraProvider {
     setupPassword: string
     mountPath: string
   }) {
-    const { projectId, environmentId, serviceId } = parseProviderVmId(input.providerVmId)
+    const { projectId, environmentId, serviceId } = parseRailwayProviderVmId(input.providerVmId)
     logRailway('configureInstanceRuntime.start', {
       instanceId: input.instanceId,
       providerVmId: input.providerVmId,
@@ -598,6 +837,8 @@ export class RailwayInfraProvider implements InfraProvider {
       imageTag: input.imageTag,
       mountPath: input.mountPath,
     })
+
+    const gatewayToken = randomBytesToken()
 
     if (!env.CLAWNOW_RAILWAY_API_TOKEN) {
       logRailway('configureInstanceRuntime.dryrun', {
@@ -612,6 +853,7 @@ export class RailwayInfraProvider implements InfraProvider {
         }),
         publicUrl: `https://${sanitizeName(input.name)}.up.railway.app`,
         status: 'ACTIVE' as const,
+        gatewayToken,
       }
     }
 
@@ -634,7 +876,8 @@ export class RailwayInfraProvider implements InfraProvider {
               OPENCLAW_STATE_DIR: `${input.mountPath}/.openclaw`,
               OPENCLAW_WORKSPACE_DIR: `${input.mountPath}/workspace`,
               OPENCLAW_VERSION: input.imageTag,
-              OPENCLAW_GATEWAY_TOKEN: randomBytesToken(),
+              OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+              ENABLE_WEB_TUI: 'true',
               PORT: String(env.CLAWNOW_RAILWAY_TARGET_PORT),
               INTERNAL_GATEWAY_PORT: String(env.CLAWNOW_RAILWAY_INTERNAL_GATEWAY_PORT),
             },
@@ -675,6 +918,7 @@ export class RailwayInfraProvider implements InfraProvider {
         }),
         publicUrl,
         status: deploymentId ? ('PROVISIONING' as const) : ('ACTIVE' as const),
+        gatewayToken,
       }
     } catch (error) {
       logRailwayError('configureInstanceRuntime', error, {
@@ -942,6 +1186,142 @@ export class RailwayInfraProvider implements InfraProvider {
         domain: domain || null,
       })
       return domain ? `https://${domain}` : undefined
+    }
+  }
+
+  private async getServiceSnapshot(serviceId: string) {
+    const response = await this.graphql<{
+      service?: {
+        name?: string
+        deployments?: unknown
+      } | null
+    }>(
+      `
+        query GetServiceSnapshot($serviceId: String!) {
+          service(id: $serviceId) {
+            name
+            deployments(first: 1) {
+              edges {
+                node {
+                  id
+                  status
+                }
+              }
+            }
+          }
+        }
+      `,
+      { serviceId },
+    )
+
+    const deployment = pickDeploymentSnapshot(response.service?.deployments)
+
+    return {
+      serviceName: asString(response.service?.name),
+      deploymentId: deployment?.id,
+      deploymentStatus: deployment?.status,
+      publicUrl: undefined,
+    }
+  }
+
+  private async findProjectWebhookByUrl(input: { projectId: string; url: string }) {
+    const webhooks = await this.listProjectWebhooks(input.projectId)
+    const normalizedUrl = normalizeWebhookUrl(input.url)
+
+    return webhooks.find((webhook) => normalizeWebhookUrl(webhook.url) === normalizedUrl) ?? null
+  }
+
+  private async listProjectWebhooks(projectId: string) {
+    try {
+      const response = await this.graphql<{
+        webhooks?: unknown
+      }>(
+        `
+          query ProjectWebhooks($projectId: String!, $first: Int!) {
+            webhooks(projectId: $projectId, first: $first) {
+              edges {
+                node {
+                  id
+                  projectId
+                  url
+                  lastStatus
+                }
+              }
+            }
+          }
+        `,
+        { projectId, first: 100 },
+      )
+
+      return collectConnectionNodes(response.webhooks)
+        .map((node) => parseRailwayWebhook(node))
+        .filter(Boolean) as RailwayProjectWebhook[]
+    } catch (error) {
+      if (!isMissingGraphqlField(error, 'webhooks')) {
+        throw error
+      }
+
+      const response = await this.graphql<{
+        railway?: {
+          webhooks?: unknown
+        } | null
+      }>(
+        `
+          query ProjectWebhooks($projectId: String!, $first: Int!) {
+            railway {
+              webhooks(projectId: $projectId, first: $first) {
+                edges {
+                  node {
+                    id
+                    projectId
+                    url
+                    lastStatus
+                  }
+                }
+              }
+            }
+          }
+        `,
+        { projectId, first: 100 },
+      )
+
+      return collectConnectionNodes(response.railway?.webhooks)
+        .map((node) => parseRailwayWebhook(node))
+        .filter(Boolean) as RailwayProjectWebhook[]
+    }
+  }
+
+  private async createProjectWebhook(input: { projectId: string; url: string }) {
+    try {
+      const response = await this.graphql<{
+        webhookCreate?: unknown
+      }>(
+        `
+          mutation CreateWebhook($projectId: String!, $url: String!) {
+            webhookCreate(input: { projectId: $projectId, url: $url }) {
+              id
+              projectId
+              url
+              lastStatus
+            }
+          }
+        `,
+        input,
+      )
+
+      const webhook = parseRailwayWebhook(response.webhookCreate)
+      if (!webhook) {
+        throw new Error('Railway webhook creation did not return a webhook id and url')
+      }
+
+      return webhook
+    } catch (error) {
+      if (!isMissingGraphqlField(error, 'webhookCreate')) {
+        throw error
+      }
+      throw new Error(
+        'Railway public GraphQL currently exposes webhook reads but not a webhookCreate mutation for this schema. Configure the project webhook in the Railway dashboard for now.',
+      )
     }
   }
 

@@ -15,6 +15,16 @@ type AccessTokenPayload = JwtPayload & {
   email: string
 }
 
+type SessionCookieSameSite = 'lax' | 'strict' | 'none'
+
+type SessionCookieConfig = {
+  apiBaseUrl: string
+  frontendOrigin: string
+  sameSite: SessionCookieSameSite
+  sessionTtlDays: number
+  domain?: string
+}
+
 function railwayCreateAllowlistEmails() {
   return env.CLAWNOW_RAILWAY_CREATE_ALLOWLIST_EMAILS
     .split(',')
@@ -28,6 +38,21 @@ function jwtSecret(): Secret {
 
 function jwtExpiresIn(): SignOptions['expiresIn'] {
   return env.JWT_EXPIRES_IN as SignOptions['expiresIn']
+}
+
+export function buildSessionCookieOptions(config: SessionCookieConfig): CookieSerializeOptions {
+  const apiBaseUrl = config.apiBaseUrl.toLowerCase()
+  const frontendOrigin = config.frontendOrigin.toLowerCase()
+  const isSecure = config.sameSite === 'none' || apiBaseUrl.startsWith('https://') || frontendOrigin.startsWith('https://')
+
+  return {
+    httpOnly: true,
+    sameSite: config.sameSite,
+    secure: isSecure,
+    path: '/',
+    maxAge: config.sessionTtlDays * 24 * 60 * 60,
+    ...(config.domain ? { domain: config.domain } : {}),
+  }
 }
 
 export class IdentityService {
@@ -195,17 +220,12 @@ export class IdentityService {
   }
 
   private cookieOptions(): CookieSerializeOptions {
-    const apiBaseUrl = env.PUBLIC_API_BASE_URL.toLowerCase()
-    const frontendOrigin = env.FRONTEND_ORIGIN.toLowerCase()
-    const isSecure = apiBaseUrl.startsWith('https://') || frontendOrigin.startsWith('https://')
-
-    return {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: isSecure,
-      path: '/',
-      maxAge: env.SESSION_TTL_DAYS * 24 * 60 * 60,
-      ...(env.SESSION_COOKIE_DOMAIN ? { domain: env.SESSION_COOKIE_DOMAIN } : {}),
-    }
+    return buildSessionCookieOptions({
+      apiBaseUrl: env.PUBLIC_API_BASE_URL,
+      frontendOrigin: env.FRONTEND_ORIGIN,
+      sameSite: env.SESSION_COOKIE_SAME_SITE,
+      sessionTtlDays: env.SESSION_TTL_DAYS,
+      domain: env.SESSION_COOKIE_DOMAIN,
+    })
   }
 }

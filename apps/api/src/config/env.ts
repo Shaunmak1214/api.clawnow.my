@@ -26,6 +26,7 @@ const envSchema = z.object({
   OPENCLAW_DEFAULT_IMAGE_TAG: z.string().min(1).default('latest'),
   SESSION_COOKIE_NAME: z.string().min(1).default('clawnow_session'),
   SESSION_COOKIE_DOMAIN: z.string().optional(),
+  SESSION_COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).default('lax'),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   INFRA_PROVIDER: z.enum(['digitalocean', 'contabo', 'railway']).default('railway'),
   DIGITALOCEAN_TOKEN: z.string().optional(),

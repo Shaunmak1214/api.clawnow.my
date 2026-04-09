@@ -54,6 +54,7 @@ export interface InfraProvider {
     providerVmId?: string
     publicUrl?: string
     status?: ProvisionedVm['status']
+    gatewayToken?: string
   }>
 }
 
