@@ -1,11 +1,19 @@
 import type { CookieSerializeOptions } from '@fastify/cookie'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { createClerkClient } from '@clerk/clerk-sdk-node'
-import jwt from 'jsonwebtoken'
+import bcrypt from 'bcryptjs'
+import jwt, { type JwtPayload, type Secret, type SignOptions } from 'jsonwebtoken'
 
 import { env } from '../config/env.js'
 import { HttpError } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
+
+const PASSWORD_ROUNDS = 12
+
+type AccessTokenPayload = JwtPayload & {
+  sub: string
+  accountId: string
+  email: string
+}
 
 type SessionCookieSameSite = 'lax' | 'strict' | 'none'
 
@@ -17,10 +25,6 @@ type SessionCookieConfig = {
   domain?: string
 }
 
-const clerk = createClerkClient({
-  secretKey: env.CLERK_SECRET_KEY,
-})
-
 function railwayCreateAllowlistEmails() {
   return env.CLAWNOW_RAILWAY_CREATE_ALLOWLIST_EMAILS
     .split(',')
@@ -28,8 +32,12 @@ function railwayCreateAllowlistEmails() {
     .filter(Boolean)
 }
 
-function jwtExpiresIn(): string {
-  return env.JWT_EXPIRES_IN
+function jwtSecret(): Secret {
+  return env.JWT_SECRET ?? env.ENCRYPTION_KEY
+}
+
+function jwtExpiresIn(): SignOptions['expiresIn'] {
+  return env.JWT_EXPIRES_IN as SignOptions['expiresIn']
 }
 
 export function buildSessionCookieOptions(config: SessionCookieConfig): CookieSerializeOptions {
@@ -48,39 +56,60 @@ export function buildSessionCookieOptions(config: SessionCookieConfig): CookieSe
 }
 
 export class IdentityService {
-  /**
-   * Sync a Clerk user to a local User/Account.
-   * Called on first login (after Clerk OAuth/signup) or on subsequent requests.
-   * Uses Clerk's API to fetch the latest user details.
-   */
-  async syncClerkUser(input: { clerkUserId: string; email: string; name?: string | null }) {
-    let user = await prisma.user.findUnique({
-      where: { clerkUserId: input.clerkUserId },
+  async signup(input: { businessName: string; email: string; password: string; name?: string | null }) {
+    const existingUser = await prisma.user.findUnique({
+      where: { email: input.email.toLowerCase() },
+    })
+
+    if (existingUser) {
+      throw new HttpError(409, 'An account with this email already exists')
+    }
+
+    const passwordHash = await bcrypt.hash(input.password, PASSWORD_ROUNDS)
+
+    const account = await prisma.account.create({
+      data: {
+        name: input.businessName,
+      },
+    })
+
+    const user = await prisma.user.create({
+      data: {
+        accountId: account.id,
+        email: input.email.toLowerCase(),
+        name: input.name ?? input.businessName,
+        passwordHash,
+      },
+    })
+
+    return {
+      account,
+      user: this.sanitizeUser(user),
+      accessToken: this.createAccessToken({
+        userId: user.id,
+        accountId: account.id,
+        email: user.email,
+      }),
+    }
+  }
+
+  async login(input: { email: string; password: string }) {
+    const user = await prisma.user.findUnique({
+      where: { email: input.email.toLowerCase() },
       include: { account: true },
     })
 
     if (!user) {
-      // First login — create account + user
-      const account = await prisma.account.create({
-        data: { name: input.name ?? input.email.split('@')[0] },
-      })
+      throw new HttpError(401, 'Invalid email or password')
+    }
 
-      user = await prisma.user.create({
-        data: {
-          accountId: account.id,
-          email: input.email.toLowerCase(),
-          clerkUserId: input.clerkUserId,
-          name: input.name ?? null,
-        },
-        include: { account: true },
-      })
-    } else if (input.name && user.name !== input.name) {
-      // Update name if changed in Clerk
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { name: input.name },
-        include: { account: true },
-      })
+    if (!user.passwordHash.startsWith('$2')) {
+      throw new HttpError(401, 'Invalid email or password')
+    }
+
+    const isValid = await bcrypt.compare(input.password, user.passwordHash)
+    if (!isValid) {
+      throw new HttpError(401, 'Invalid email or password')
     }
 
     return {
@@ -88,7 +117,7 @@ export class IdentityService {
       user: this.sanitizeUser(user),
       accessToken: this.createAccessToken({
         userId: user.id,
-        accountId: user.accountId,
+        accountId: user.account.id,
         email: user.email,
       }),
     }
@@ -96,6 +125,10 @@ export class IdentityService {
 
   async logout(_request: FastifyRequest) {
     return
+  }
+
+  setAuthCookie(reply: FastifyReply, accessToken: string) {
+    reply.setCookie(env.SESSION_COOKIE_NAME, accessToken, this.cookieOptions())
   }
 
   clearAuthCookie(reply: FastifyReply) {
@@ -108,17 +141,15 @@ export class IdentityService {
       throw new HttpError(401, 'Authentication required')
     }
 
-    // Verify Clerk JWT and extract user info
-    const { sub: clerkUserId } = await clerk.verifyToken(token)
+    const payload = this.verifyAccessToken(token)
 
-    // Look up user by clerkUserId
     const user = await prisma.user.findUnique({
-      where: { clerkUserId },
+      where: { id: payload.sub },
       include: { account: true },
     })
 
-    if (!user) {
-      throw new HttpError(401, 'Account not found. Please sign in again.')
+    if (!user || user.accountId !== payload.accountId) {
+      throw new HttpError(401, 'Authentication required')
     }
 
     const sanitizedUser = this.sanitizeUser(user)
@@ -145,12 +176,25 @@ export class IdentityService {
         accountId: input.accountId,
         email: input.email,
       },
-      env.ENCRYPTION_KEY,
+      jwtSecret(),
       {
         subject: input.userId,
         expiresIn: jwtExpiresIn(),
-      } as jwt.SignOptions,
+      },
     )
+  }
+
+  private verifyAccessToken(token: string): AccessTokenPayload {
+    try {
+      const decoded = jwt.verify(token, jwtSecret())
+      if (!decoded || typeof decoded === 'string' || typeof decoded.sub !== 'string' || typeof decoded.accountId !== 'string' || typeof decoded.email !== 'string') {
+        throw new HttpError(401, 'Authentication required')
+      }
+
+      return decoded as AccessTokenPayload
+    } catch {
+      throw new HttpError(401, 'Authentication required')
+    }
   }
 
   private extractBearerToken(request: FastifyRequest) {
@@ -161,12 +205,17 @@ export class IdentityService {
         return token
       }
     }
+
+    const cookieToken = request.cookies?.[env.SESSION_COOKIE_NAME]
+    if (typeof cookieToken === 'string' && cookieToken.length > 0) {
+      return cookieToken
+    }
+
     return null
   }
 
-  private sanitizeUser<T extends { passwordHash?: string; clerkUserId?: string | null }>(user: T) {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { passwordHash: _passwordHash, clerkUserId: _clerkUserId, ...rest } = user
+  private sanitizeUser<T extends { passwordHash: string }>(user: T) {
+    const { passwordHash, ...rest } = user
     return rest
   }
 
