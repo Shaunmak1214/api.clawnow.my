@@ -103,7 +103,7 @@ export class IdentityService {
       throw new HttpError(401, 'Invalid email or password')
     }
 
-    if (!user.passwordHash.startsWith('$2')) {
+    if (typeof user.passwordHash !== 'string' || !user.passwordHash.startsWith('$2')) {
       throw new HttpError(401, 'Invalid email or password')
     }
 
