@@ -20,6 +20,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
   AGENT_SHARED_SECRET: z.string().min(1),
   ENCRYPTION_KEY: z.string().min(16),
+  CLERK_SECRET_KEY: z.string().min(1).optional(),
   JWT_SECRET: z.string().min(16).optional(),
   JWT_EXPIRES_IN: z.string().min(2).default('30d'),
   INSTANCE_PROVISIONING_MODE: z.enum(['manual', 'automatic']).default('automatic'),

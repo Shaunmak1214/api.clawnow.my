@@ -25,26 +25,29 @@ function generateSshPassword() {
   return randomBytes(18).toString('base64url')
 }
 
-function validateRailwayClawName(clawName: string) {
+function validateClawDisplayName(clawName: string) {
   const normalized = clawName.trim()
 
   if (!normalized) {
     throw new HttpError(400, 'Claw name is required')
   }
 
-  if (normalized.length < 3 || normalized.length > 63) {
-    throw new HttpError(400, 'Claw name must be between 3 and 63 characters')
-  }
-
-  if (!/^[a-z0-9-]+$/.test(normalized)) {
-    throw new HttpError(400, 'Claw name may only contain lowercase letters, numbers, and hyphens')
-  }
-
-  if (normalized.startsWith('-') || normalized.endsWith('-')) {
-    throw new HttpError(400, 'Claw name cannot start or end with a hyphen')
+  if (normalized.length > 120) {
+    throw new HttpError(400, 'Claw name must be 120 characters or fewer')
   }
 
   return normalized
+}
+
+function normalizeRailwayClawName(clawName: string) {
+  const normalized = validateClawDisplayName(clawName)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 50)
+
+  return normalized || `clawnow-${randomUUID().slice(0, 8)}`
 }
 
 function mapRailwayProvisioningError(error: unknown) {
@@ -52,11 +55,11 @@ function mapRailwayProvisioningError(error: unknown) {
   const normalized = message.toLowerCase()
 
   if (normalized.includes('already exists') || normalized.includes('has already been taken') || normalized.includes('duplicate')) {
-    return new HttpError(409, 'A Railway service with that Claw name already exists')
+    return new HttpError(409, 'That agent name maps to a Railway service name that already exists')
   }
 
   if (normalized.includes('validation') || normalized.includes('invalid')) {
-    return new HttpError(400, `Railway rejected this Claw name: ${message}`)
+    return new HttpError(400, `Railway rejected the generated service name for this agent: ${message}`)
   }
 
   return null
@@ -369,10 +372,11 @@ export class InstanceService {
     imageTag: string
     sizeProfile: InstanceSizeProfile
   }) {
-    const instanceName =
+    const displayName = validateClawDisplayName(input.clawName || input.name)
+    const railwayServiceName =
       env.INFRA_PROVIDER === 'railway'
-        ? validateRailwayClawName(input.clawName || input.name)
-        : input.name
+        ? normalizeRailwayClawName(input.clawName || input.name)
+        : null
 
     if (env.INFRA_PROVIDER === 'contabo') {
       const existingInstance = await prisma.openClawInstance.findFirst({
@@ -405,7 +409,7 @@ export class InstanceService {
     if (env.INFRA_PROVIDER === 'contabo' || env.INFRA_PROVIDER === 'railway') {
       try {
         selectedVm = await this.vmService.ensureVmForRegion(input.region, {
-          hostname: env.INFRA_PROVIDER === 'railway' ? instanceName : undefined,
+          hostname: env.INFRA_PROVIDER === 'railway' ? railwayServiceName ?? undefined : undefined,
         })
       } catch (error) {
         if (env.INFRA_PROVIDER === 'railway') {
@@ -439,7 +443,8 @@ export class InstanceService {
     if (env.INFRA_PROVIDER === 'railway') {
       logRailwayInstance('createInstance.start', {
         accountId: input.accountId,
-        name: instanceName,
+        name: displayName,
+        railwayServiceName,
         region: input.region,
         imageTag: input.imageTag,
         sizeProfile: input.sizeProfile,
@@ -452,7 +457,7 @@ export class InstanceService {
       data: {
         accountId: input.accountId,
         currentVmId: selectedVm.id,
-        name: instanceName,
+        name: displayName,
         imageTag: input.imageTag,
         sizeProfile: mapSizeProfile(input.sizeProfile),
         reservedCpuMillicores: profile.reservedCpuMillicores,
@@ -519,11 +524,12 @@ export class InstanceService {
       data: {
         instanceId: instance.id,
         type: 'deployment.requested',
-        message: `Queued deployment for ${instanceName}`,
+        message: `Queued deployment for ${displayName}`,
         metadata: {
           region: input.region,
           sizeProfile: input.sizeProfile,
           vmId: selectedVm.id,
+          railwayServiceName,
         },
       },
     })
@@ -533,7 +539,7 @@ export class InstanceService {
         const runtime = await this.infra.configureInstanceRuntime({
           providerVmId: selectedVm.providerVmId,
           instanceId: instance.id,
-          name: instanceName,
+          name: railwayServiceName ?? displayName,
           region: input.region,
           imageTag: input.imageTag,
           setupPassword: sshPassword,
@@ -562,10 +568,11 @@ export class InstanceService {
           data: {
             instanceId: instance.id,
             type: 'deployment.started',
-            message: `Started Railway deployment for ${instanceName}`,
+            message: `Started Railway deployment for ${displayName}`,
             metadata: {
               provider: 'railway',
               publicUrl: runtime.publicUrl,
+              railwayServiceName,
             },
           },
         })
@@ -577,6 +584,7 @@ export class InstanceService {
             providerVmId: runtime.providerVmId ?? selectedVm.providerVmId,
             publicUrl: runtime.publicUrl ?? null,
             status: runtime.status ?? selectedVm.status,
+            railwayServiceName,
           })
         }
       } catch (error) {

@@ -1,5 +1,6 @@
 import type { CookieSerializeOptions } from '@fastify/cookie'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { createClerkClient } from '@clerk/clerk-sdk-node'
 import bcrypt from 'bcryptjs'
 import jwt, { type JwtPayload, type Secret, type SignOptions } from 'jsonwebtoken'
 
@@ -8,6 +9,11 @@ import { HttpError } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
 
 const PASSWORD_ROUNDS = 12
+const clerk = env.CLERK_SECRET_KEY
+  ? createClerkClient({
+      secretKey: env.CLERK_SECRET_KEY,
+    })
+  : null
 
 type AccessTokenPayload = JwtPayload & {
   sub: string
@@ -56,6 +62,85 @@ export function buildSessionCookieOptions(config: SessionCookieConfig): CookieSe
 }
 
 export class IdentityService {
+  async syncClerkUser(input: { clerkUserId: string; email: string; name?: string | null }) {
+    const normalizedEmail = input.email.trim().toLowerCase()
+
+    let user = await prisma.user.findUnique({
+      where: { clerkUserId: input.clerkUserId },
+      include: { account: true },
+    })
+
+    if (!user) {
+      user = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        include: { account: true },
+      })
+    } else if (user.email !== normalizedEmail) {
+      const emailOwner = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      })
+
+      if (emailOwner && emailOwner.id !== user.id) {
+        throw new HttpError(409, 'This email is already linked to another account')
+      }
+    }
+
+    if (!user) {
+      const account = await prisma.account.create({
+        data: {
+          name: input.name ?? normalizedEmail.split('@')[0] ?? 'ClawNow Workspace',
+        },
+      })
+
+      user = await prisma.user.create({
+        data: {
+          accountId: account.id,
+          email: normalizedEmail,
+          clerkUserId: input.clerkUserId,
+          name: input.name ?? null,
+        },
+        include: { account: true },
+      })
+    } else {
+      const updates: {
+        clerkUserId?: string
+        email?: string
+        name?: string | null
+      } = {}
+
+      if (user.clerkUserId !== input.clerkUserId) {
+        updates.clerkUserId = input.clerkUserId
+      }
+
+      if (user.email !== normalizedEmail) {
+        updates.email = normalizedEmail
+      }
+
+      if (input.name && user.name !== input.name) {
+        updates.name = input.name
+      }
+
+      if (Object.keys(updates).length > 0) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: updates,
+          include: { account: true },
+        })
+      }
+    }
+
+    return {
+      account: user.account,
+      user: this.sanitizeUser(user),
+      accessToken: this.createAccessToken({
+        userId: user.id,
+        accountId: user.accountId,
+        email: user.email,
+      }),
+    }
+  }
+
   async signup(input: { businessName: string; email: string; password: string; name?: string | null }) {
     const existingUser = await prisma.user.findUnique({
       where: { email: input.email.toLowerCase() },
@@ -141,6 +226,26 @@ export class IdentityService {
       throw new HttpError(401, 'Authentication required')
     }
 
+    const clerkUserId = await this.verifyClerkAccessToken(token)
+    if (clerkUserId) {
+      const user = await prisma.user.findUnique({
+        where: { clerkUserId },
+        include: { account: true },
+      })
+
+      if (!user) {
+        throw new HttpError(401, 'Account not found. Please sign in again.')
+      }
+
+      const sanitizedUser = this.sanitizeUser(user)
+
+      return {
+        account: user.account,
+        user: sanitizedUser,
+        capabilities: this.capabilitiesForUser(sanitizedUser),
+      }
+    }
+
     const payload = this.verifyAccessToken(token)
 
     const user = await prisma.user.findUnique({
@@ -197,6 +302,19 @@ export class IdentityService {
     }
   }
 
+  private async verifyClerkAccessToken(token: string): Promise<string | null> {
+    if (!clerk) {
+      return null
+    }
+
+    try {
+      const verifiedToken = await clerk.verifyToken(token)
+      return typeof verifiedToken.sub === 'string' ? verifiedToken.sub : null
+    } catch {
+      return null
+    }
+  }
+
   private extractBearerToken(request: FastifyRequest) {
     const header = request.headers.authorization
     if (header) {
@@ -214,8 +332,8 @@ export class IdentityService {
     return null
   }
 
-  private sanitizeUser<T extends { passwordHash: string }>(user: T) {
-    const { passwordHash, ...rest } = user
+  private sanitizeUser<T extends { passwordHash?: string | null; clerkUserId?: string | null }>(user: T) {
+    const { passwordHash, clerkUserId, ...rest } = user
     return rest
   }
 

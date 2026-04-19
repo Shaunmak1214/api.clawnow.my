@@ -15,8 +15,28 @@ const loginSchema = z.object({
   password: z.string().min(8),
 })
 
+const clerkSyncSchema = z.object({
+  userId: z.string().min(1),
+  email: z.string().email(),
+  name: z.string().min(1).optional(),
+})
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
   const identityService = new IdentityService()
+
+  app.post('/auth/sync', async (request) => {
+    const input = clerkSyncSchema.parse(request.body)
+    const result = await identityService.syncClerkUser({
+      clerkUserId: input.userId,
+      email: input.email,
+      name: input.name ?? null,
+    })
+
+    return {
+      ...result,
+      capabilities: identityService.capabilitiesForUser(result.user),
+    }
+  })
 
   app.post('/auth/signup', async (request, reply) => {
     const input = signupSchema.parse(request.body)

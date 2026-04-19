@@ -99,16 +99,17 @@ model Account {
 }
 
 model User {
-  id         String    @id @default(cuid())
-  accountId  String
-  email      String    @unique
+  id           String    @id @default(cuid())
+  accountId    String
+  email        String    @unique
+  clerkUserId  String?   @unique
   passwordHash String   @default("")
-  name       String?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  account    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  sessions   Session[]
-  sshKeys    SshKey[]
+  name         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  account      Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  sessions     Session[]
+  sshKeys      SshKey[]
 }
 
 model Session {
